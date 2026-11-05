@@ -6,6 +6,7 @@ import { GardenAudio } from './audio.js';
 import { SEAT_LAYOUT } from './seat-layout.js';
 import { GardenConnection } from './together.js';
 import { RemoteMotion } from './remote-motion.js';
+import { createSpeechBubble } from './speech-bubble.js';
 import { setupChatUI } from './chat-ui.js';
 import { clapFacing,CLAP_DURATION,CLAP_RETURN } from './clap-facing.js';
 import { normalizeName,vocative } from './personalization.js';
@@ -129,7 +130,7 @@ const head=group(0,1.9,0,body);sphere(head,'#f5d3bc',0,0,0,.58);const hair=spher
 const hat=mesh(new THREE.ConeGeometry(.34,.95,16),'#e7a5bd',head,0,.88,0);hat.rotation.z=-.12;glow(head,'#ffedc8',-.05,1.38,0,.11);
 const limbs=[];for(let side of [-1,1]){const arm=group(side*.52,1.34,0,body);cyl(arm,'#eddec4',0,-.25,0,.15,.16,.5,10);sphere(arm,'#f5d3bc',0,-.55,0,.14);const leg=group(side*.22,.7,0,body);cyl(leg,'#665e75',0,-.14,0,.16,.17,.28,10);const knee=group(0,-.28,0,leg);cyl(knee,'#665e75',0,-.14,0,.15,.16,.28,10);box(knee,'#f1e4da',0,-.28,-.08,.32,.2,.48);limbs.push({arm,leg,knee,side});}
 const reaction=label(body,'♡',0,3.6,0,1.1,.85,'#ffbfd5');reaction.visible=false;
-return {root:player,body,limbs,reaction};
+return {root:player,body,limbs,reaction,speech:createSpeechBubble(body)};
 }
 const visitor=createVisitor(0,19);
 const {root:player,body,limbs}=visitor;
@@ -171,7 +172,7 @@ const connection=new GardenConnection({
     const live=new Set(players.filter(p=>p.id!==id).map(p=>p.id));
     for(const [key,friend] of friends)if(!live.has(key)){
       friend.avatar.root.traverse(o=>{if(o.isMesh)o.geometry.dispose();if(o.isSprite)o.material.dispose();});
-      friend.tag.material.map.dispose();friend.tag.material.dispose();friend.avatar.reaction.material.map.dispose();friend.avatar.reaction.material.dispose();friend.avatar.root.removeFromParent();friends.delete(key);emotes.delete(key);
+      friend.tag.material.map.dispose();friend.tag.material.dispose();friend.avatar.reaction.material.map.dispose();friend.avatar.reaction.material.dispose();friend.avatar.speech.dispose();friend.avatar.root.removeFromParent();friends.delete(key);emotes.delete(key);
     }
     for(const state of players){if(state.emote)receiveEmote(state.id,state.emote,serverNow);if(state.id===id)continue;let friend=friends.get(state.id);
       if(!friend){const avatar=createVisitor(state.x,state.z,'#d5dfed');const tag=label(avatar.body,state.label||'친구 ♡',0,3.7,0,1.8,.45);friend={avatar,tag,state,motion:new RemoteMotion(),pose:{}};friends.set(state.id,friend);}
@@ -184,7 +185,12 @@ const connection=new GardenConnection({
     if(friend&&friend.motion.push(state,serverNow))friend.state=state;
   },
   message(data){
-    if(data.type==='chat')chat.receive(data.message,data.message.senderId===connection.id);
+    if(data.type==='chat'){
+      const self=data.message.senderId===connection.id;
+      chat.receive(data.message,self);
+      const avatar=self?visitor:friends.get(data.message.senderId)?.avatar;
+      avatar?.speech.show(data.message.text,self?'local':data.message.senderId);
+    }
     if(data.type==='chat-error')chat.reject(data.clientId,data.code);
     if(data.type==='celebration')beginBirthday(data.event,data.serverNow);
     if(data.type==='emote')receiveEmote(data.playerId,data.emote,data.serverNow);
@@ -317,7 +323,7 @@ function emoteFrame(avatar,key,time,seat){
   for(const limb of avatar.limbs){
     if(emote.kind==='wave'&&limb.side===1){limb.arm.rotation.z=2.5+Math.sin(age*14)*.25;limb.arm.rotation.x=.15;}
     if(emote.kind==='heart'){limb.arm.rotation.x=1.1;limb.arm.rotation.z=-limb.side*.55;}
-    if(emote.kind==='clap'){limb.arm.position.y=1.59;limb.arm.rotation.x=1.9;limb.arm.rotation.z=limb.side*(-.65+Math.sin(age*18)*.25);}
+    if(emote.kind==='clap'){limb.arm.position.y=1.34;limb.arm.rotation.x=1.05;limb.arm.rotation.z=limb.side*(-.8+Math.sin(age*18)*.15);}
   }
   avatar.reaction.position.y=3.6+Math.sin(time*3)*.12;
   avatar.reaction.quaternion.copy(avatar.root.quaternion).invert().multiply(camera.quaternion);
@@ -382,7 +388,7 @@ desiredCamera.y=Math.max(desiredCamera.y,3);camera.position.lerp(desiredCamera,1
 if(Math.hypot(camera.position.x-16,camera.position.z+1)<5.5)camera.position.y=Math.max(camera.position.y,9.2);
 smoothLook.lerp(look,1-Math.exp(-dt*6));camera.lookAt(smoothLook);
 targetUpdate();frameNumber++;if(frameNumber%12===0||(walking&&frameNumber%4===0))renderer.shadowMap.needsUpdate=true;
-qualityFrames++;if(performance.now()-qualityTime>2500){const fps=qualityFrames*1000/(performance.now()-qualityTime);if(fps<24&&renderer.getPixelRatio()>.75)renderer.setPixelRatio(Math.max(.75,renderer.getPixelRatio()-.25));qualityFrames=0;qualityTime=performance.now();}renderer.render(scene,camera);}
+qualityFrames++;if(performance.now()-qualityTime>2500){const fps=qualityFrames*1000/(performance.now()-qualityTime);if(fps<24&&renderer.getPixelRatio()>.75)renderer.setPixelRatio(Math.max(.75,renderer.getPixelRatio()-.25));qualityFrames=0;qualityTime=performance.now();}renderer.render(scene,camera);visitor.speech.update(camera,innerWidth,innerHeight);for(const friend of friends.values())friend.avatar.speech.update(camera,innerWidth,innerHeight);}
 const experience=setupExperienceUI({name:birthdayName,onEmote:sendEmote,onReset:resetCamera,onModal(open){modal=open;resetSeatMovement();},onPhoto(open){photoMode=open;resetSeatMovement();},async capture(){
   const previous=renderer.getPixelRatio(),size=new THREE.Vector2();renderer.getSize(size);
   try{
