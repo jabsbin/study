@@ -5,6 +5,7 @@ import { BIRTHDAY_LETTER, GIFT_MESSAGES } from './content.js';
 import { GardenAudio } from './audio.js';
 import { SEAT_LAYOUT } from './seat-layout.js';
 import { GardenConnection } from './together.js';
+import { RemoteMotion } from './remote-motion.js';
 import { normalizeName,vocative } from './personalization.js';
 import { setupExperienceUI } from './experience-ui.js';
 
@@ -167,13 +168,17 @@ const connection=new GardenConnection({
     const live=new Set(players.filter(p=>p.id!==id).map(p=>p.id));
     for(const [key,friend] of friends)if(!live.has(key)){
       friend.avatar.root.traverse(o=>{if(o.isMesh)o.geometry.dispose();if(o.isSprite)o.material.dispose();});
-      friend.tag.material.map.dispose();friend.tag.material.dispose();friend.avatar.reaction.material.map.dispose();friend.avatar.reaction.material.dispose();friend.avatar.root.removeFromParent();friends.delete(key);
+      friend.tag.material.map.dispose();friend.tag.material.dispose();friend.avatar.reaction.material.map.dispose();friend.avatar.reaction.material.dispose();friend.avatar.root.removeFromParent();friends.delete(key);emotes.delete(key);
     }
     for(const state of players){if(state.emote)receiveEmote(state.id,state.emote,serverNow);if(state.id===id)continue;let friend=friends.get(state.id);
-      if(!friend){const avatar=createVisitor(state.x,state.z,'#d5dfed');const tag=label(avatar.body,'친구 ♡',0,3.7,0,1.8,.45);friend={avatar,tag,state};friends.set(state.id,friend);}
-      friend.state=state;
+      if(!friend){const avatar=createVisitor(state.x,state.z,'#d5dfed');const tag=label(avatar.body,'친구 ♡',0,3.7,0,1.8,.45);friend={avatar,tag,state,motion:new RemoteMotion(),pose:{}};friends.set(state.id,friend);}
+      if(friend.motion.push(state,serverNow))friend.state=state;
     }
     updateTogether(connection.online?'online':'offline');
+  },
+  movement(state,serverNow){
+    const friend=friends.get(state.id);
+    if(friend&&friend.motion.push(state,serverNow))friend.state=state;
   },
   message(data){
     if(data.type==='celebration')beginBirthday(data.event,data.serverNow);
@@ -332,16 +337,14 @@ const walking=entered&&!locked&&!modal&&!seated&&!pendingSeat&&!celebrationPendi
 if(seated){player.position.x=THREE.MathUtils.damp(player.position.x,seated.seat.sitX,10,dt);player.position.z=THREE.MathUtils.damp(player.position.z,seated.seat.sitZ,10,dt);}
 poseVisitor(visitor,seated?.seat,walking,time,dt,keys.has('shift'));emoteFrame(visitor,'local',time);
 for(const [friendId,friend] of friends){
-  const {avatar,state,tag}=friend;
-  avatar.root.position.x=THREE.MathUtils.damp(avatar.root.position.x,state.x,12,dt);
-  avatar.root.position.z=THREE.MathUtils.damp(avatar.root.position.z,state.z,12,dt);
-  avatar.root.rotation.y+=Math.atan2(Math.sin(state.rotation-avatar.root.rotation.y),Math.cos(state.rotation-avatar.root.rotation.y))*Math.min(1,dt*12);
-  poseVisitor(avatar,seats.find(seat=>seat.id===state.seatId),state.moving&&!locked,time,dt);emoteFrame(avatar,friendId,time);
+  const {avatar,tag}=friend,pose=friend.motion.sample(performance.now(),friend.pose);
+  avatar.root.position.x=pose.x;avatar.root.position.z=pose.z;avatar.root.rotation.y=pose.rotation;
+  poseVisitor(avatar,seats.find(seat=>seat.id===pose.seatId),pose.moving&&!locked,time,dt);emoteFrame(avatar,friendId,time);
   tag.quaternion.copy(avatar.root.quaternion).invert().multiply(camera.quaternion);
 }
-if(entered&&connection.online&&!seated&&!locked&&!pendingSeat&&!celebrationPending&&performance.now()-lastNetworkUpdate>120){
+if(entered&&connection.online&&!seated&&!locked&&!pendingSeat&&!celebrationPending&&performance.now()-lastNetworkUpdate>=50){
   const stateKey=`${player.position.x.toFixed(2)},${player.position.z.toFixed(2)},${player.rotation.y.toFixed(2)},${walking}`;
-  if(stateKey!==lastNetworkState){lastNetworkState=stateKey;lastNetworkUpdate=performance.now();connection.send({type:'move',x:player.position.x,z:player.position.z,rotation:player.rotation.y,moving:walking});}
+  if(stateKey!==lastNetworkState&&connection.send({type:'move',x:player.position.x,z:player.position.z,rotation:player.rotation.y,moving:walking})){lastNetworkState=stateKey;const now=performance.now();lastNetworkUpdate=now-(now-lastNetworkUpdate)%50;}
 }
 for(const a of animals){a.head.rotation.z=Math.sin(time*.8+a.phase)*.055;a.g.position.y=celebrating?Math.abs(Math.sin(time*5+a.phase))*.6:0;}for(const g of gifts){g.angle=THREE.MathUtils.damp(g.angle,g.opened?-2:0,5,dt);g.lid.rotation.x=g.angle;}
 flames.forEach((f,i)=>f.scale.y=1.5+Math.sin(time*11+i)*.25);candleLight.intensity=flames.some(f=>f.visible)?10+Math.sin(time*8)*2:0;floatingBalloons.forEach((g,i)=>g.position.y=Math.sin(time*.9+i)*.16);envelope.position.y=2+Math.sin(time*1.5)*.18;envelope.rotation.y=Math.sin(time*.7)*.12;
@@ -377,4 +380,4 @@ const experience=setupExperienceUI({name:birthdayName,onEmote:sendEmote,onReset:
   }finally{renderer.setPixelRatio(previous);renderer.setSize(size.x,size.y,false);}
 }});
 camera.position.set(4,25,42);frame();window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.fov=innerWidth<=700?62:51;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
-window.__garden={get ready(){return renderer.info.render.calls>0;},get position(){return {x:player.position.x,z:player.position.z};},get openedGifts(){return gifts.filter(g=>g.opened).length;},get celebrating(){return celebrating;},get intro(){return intro;},get seated(){return seated?.seat.id??null;},get connected(){return connection.online;},get birthdayName(){return birthdayName;},get celebrationId(){return celebration?.id??null;},get cameraView(){return {yaw,pitch,distance};},get framing(){return [player,...[...friends.values()].map(f=>f.avatar.root)].map(root=>{const p=root.position.clone().add(new THREE.Vector3(0,2,0)).project(camera);return {x:p.x,y:p.y,z:p.z};});},get photoMode(){return photoMode;},get emote(){const e=emotes.get('local');return e&&performance.now()-e.clock<3000?e.kind:null;},get friends(){return [...friends.values()].map(f=>({id:f.state.id,seatId:f.state.seatId,x:f.state.x,z:f.state.z,emote:emotes.get(f.state.id)&&performance.now()-emotes.get(f.state.id).clock<3000?emotes.get(f.state.id).kind:null}));}};
+window.__garden={get ready(){return renderer.info.render.calls>0;},get position(){return {x:player.position.x,z:player.position.z};},get openedGifts(){return gifts.filter(g=>g.opened).length;},get celebrating(){return celebrating;},get intro(){return intro;},get seated(){return seated?.seat.id??null;},get connected(){return connection.online;},get birthdayName(){return birthdayName;},get celebrationId(){return celebration?.id??null;},get cameraView(){return {yaw,pitch,distance};},get framing(){return [player,...[...friends.values()].map(f=>f.avatar.root)].map(root=>{const p=root.position.clone().add(new THREE.Vector3(0,2,0)).project(camera);return {x:p.x,y:p.y,z:p.z};});},get photoMode(){return photoMode;},get emote(){const e=emotes.get('local');return e&&performance.now()-e.clock<3000?e.kind:null;},get friends(){return [...friends.values()].map(f=>({id:f.state.id,seatId:f.state.seatId,x:f.state.x,z:f.state.z,displayX:f.avatar.root.position.x,displayZ:f.avatar.root.position.z,displayTime:f.pose.renderedAt,emote:emotes.get(f.state.id)&&performance.now()-emotes.get(f.state.id).clock<3000?emotes.get(f.state.id).kind:null}));}};

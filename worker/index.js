@@ -37,8 +37,8 @@ export class BirthdayGarden extends DurableObject {
   sockets() { return this.ctx.getWebSockets().filter(socket => socket.readyState === WebSocket.OPEN); }
   snapshot() {
     return this.sockets().map(socket => {
-      const { id, x, z, rotation, moving, seatId, emote } = socket.deserializeAttachment();
-      return { id, x, z, rotation, moving, seatId, emote:emote&&Date.now()-emote.startedAt<3000?emote:null };
+      const { id, x, z, rotation, moving, seatId, emote, updatedAt, sampleTime } = socket.deserializeAttachment();
+      return { id, x, z, rotation, moving, seatId, updatedAt, sampleTime, emote:emote&&Date.now()-emote.startedAt<3000?emote:null };
     });
   }
   send(socket, data) { try { socket.send(JSON.stringify(data)); } catch { /* A closing peer is removed by its close event. */ } }
@@ -46,12 +46,20 @@ export class BirthdayGarden extends DurableObject {
     const data = { type: 'snapshot', players: this.snapshot(),serverNow:Date.now() };
     for (const socket of this.sockets()) this.send(socket, data);
   }
-  async fetch() {
+  movement(sender,state){
+    const player={id:state.id,x:state.x,z:state.z,rotation:state.rotation,moving:state.moving,seatId:state.seatId,updatedAt:state.updatedAt,sampleTime:state.sampleTime};
+    let legacySnapshot;
+    for(const peer of this.sockets()){
+      if(peer.deserializeAttachment().protocol===2){if(peer!==sender)this.send(peer,{type:'player-moved',player,serverNow:Date.now()});}
+      else {legacySnapshot??={type:'snapshot',players:this.snapshot(),serverNow:Date.now()};this.send(peer,legacySnapshot);}
+    }
+  }
+  async fetch(request) {
     const count = this.sockets().length;
     if (count >= MAX_GUESTS) return new Response('The garden is full. Please try again shortly.', { status: 503 });
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    const state = { id: crypto.randomUUID(), x: (count % 4 - 1.5) * 1.3, z: 19 + Math.floor(count / 4) * 1.5, rotation: 0, moving: false, seatId: null, windowStart: Date.now(), packets: 0 };
+    const state = { id: crypto.randomUUID(), x: (count % 4 - 1.5) * 1.3, z: 19 + Math.floor(count / 4) * 1.5, rotation: 0, moving: false, seatId: null, protocol:new URL(request.url).searchParams.get('v')==='2'?2:1,updatedAt:Date.now(), windowStart: Date.now(), packets: 0 };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(state);
     this.send(server, { type: 'welcome', id: state.id, spawn: { x: state.x, z: state.z } });
@@ -76,7 +84,7 @@ export class BirthdayGarden extends DurableObject {
       if(state.seatId||Math.hypot(state.x,state.z+7)>7.8){this.send(socket,{type:'action-rejected',reason:'cake-distance'});return;}
       this.celebration={id:crypto.randomUUID(),startedAt:now,duration:11500,seed:Math.floor(Math.random()*0x7fffffff)};
       state.moving=false;socket.serializeAttachment(state);
-      for(const peer of this.sockets()){const player=peer.deserializeAttachment();player.moving=false;peer.serializeAttachment(player);}
+      for(const peer of this.sockets()){const player=peer.deserializeAttachment();player.moving=false;player.updatedAt=now;delete player.sampleTime;peer.serializeAttachment(player);}
       await this.ctx.storage.put('celebration',this.celebration);
       this.broadcast();
       this.announce({type:'celebration',event:this.celebration});return;
@@ -93,7 +101,9 @@ export class BirthdayGarden extends DurableObject {
     if (message.type === 'move') {
       if (!state.seatId && validPosition(message) && Number.isFinite(message.rotation)) {
         state.x = message.x; state.z = message.z;
-        state.rotation = message.rotation % (Math.PI * 2); state.moving = message.moving === true;
+        state.rotation = message.rotation % (Math.PI * 2); state.moving = message.moving === true;state.updatedAt=now;
+        if(Number.isFinite(message.sampleTime)&&message.sampleTime>=0&&message.sampleTime<1e12)state.sampleTime=message.sampleTime;else delete state.sampleTime;
+        socket.serializeAttachment(state);this.movement(socket,state);return;
       }
     } else if (message.type === 'sit') {
       const seat = layout.get(message.seatId);
@@ -104,13 +114,13 @@ export class BirthdayGarden extends DurableObject {
       }
       state.returnPosition = { x: state.x, z: state.z };
       state.seatId = seat.id; state.x = seat.x - Math.sin(seat.angle) * .3;
-      state.z = seat.z - Math.cos(seat.angle) * .3; state.rotation = seat.angle; state.moving = false;
+      state.z = seat.z - Math.cos(seat.angle) * .3; state.rotation = seat.angle; state.moving = false;state.updatedAt=now;delete state.sampleTime;
       socket.serializeAttachment(state);
       this.send(socket, { type: 'seat-confirmed', seatId: seat.id });
     } else if (message.type === 'stand') {
       if (state.seatId) {
         state.x = state.returnPosition.x; state.z = state.returnPosition.z;
-        state.seatId = null; state.moving = false; delete state.returnPosition;
+        state.seatId = null; state.moving = false;state.updatedAt=now;delete state.sampleTime; delete state.returnPosition;
       }
       socket.serializeAttachment(state);
       this.send(socket, { type: 'stood-up' });

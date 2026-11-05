@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 const base = process.env.GARDEN_TEST_URL || 'http://127.0.0.1:8787';
-async function guest(name='') {
-  const url=new URL('/api/room',base);if(name)url.searchParams.set('name',name);url.protocol=url.protocol==='https:'?'wss:':'ws:';
+async function guest(name='',protocol=1) {
+  const url=new URL('/api/room',base);if(name)url.searchParams.set('name',name);if(protocol===2)url.searchParams.set('v','2');url.protocol=url.protocol==='https:'?'wss:':'ws:';
   const socket = new WebSocket(url);
   const messages=[];
   socket.addEventListener('message',event=>messages.push(JSON.parse(event.data)));
@@ -69,4 +69,22 @@ test('named gardens isolate guests; birthday and emotes are shared and late join
     const stopped=b.messages.filter(m=>m.type==='snapshot').at(-1).players.find(p=>p.id===b.id);
     assert.equal(stopped.z,19);assert.equal(stopped.moving,false);
   }finally{a.socket.close(1000);b.socket.close(1000);other.socket.close(1000);late?.socket.close(1000);}
+});
+
+
+test('modern movement sends ordered individual updates without self echo; legacy clients still receive snapshots',{timeout:15000},async()=>{
+ const room='motion-'+crypto.randomUUID().slice(0,8),a=await guest(room,2),b=await guest(room,2),legacy=await guest(room);
+ try{
+  await a.wait(m=>m.type==='snapshot'&&m.players.length===3);
+  const markA=a.messages.length,markB=b.messages.length,markLegacy=legacy.messages.length;
+  for(let i=0;i<20;i++){a.send({type:'move',x:i*.1,z:19,rotation:0,moving:true,sampleTime:i*50});await new Promise(resolve=>setTimeout(resolve,50));}
+  await b.wait(m=>m.type==='player-moved'&&Math.abs(m.player.x-1.9)<1e-8,markB);
+  const updates=b.messages.slice(markB).filter(m=>m.type==='player-moved');assert.equal(updates.length,20);
+  for(let i=0;i<updates.length;i++)assert.equal(updates[i].player.sampleTime,i*50);
+  for(let i=1;i<updates.length;i++)assert(updates[i].player.updatedAt>updates[i-1].player.updatedAt);
+  assert.equal(a.messages.slice(markA).filter(m=>m.type==='player-moved'||m.type==='snapshot').length,0);
+  assert(legacy.messages.slice(markLegacy).some(m=>m.type==='snapshot'&&m.players.find(p=>p.id===a.id)&&Math.abs(m.players.find(p=>p.id===a.id).x-1.9)<1e-8));
+  const seat=b.messages.length;a.send({type:'move',x:-5.95,z:-19.7,rotation:0,moving:false});a.send({type:'sit',seatId:'bench-left-left'});
+  await b.wait(m=>m.type==='snapshot'&&m.players.find(p=>p.id===a.id)?.seatId==='bench-left-left',seat);
+ }finally{a.socket.close(1000);b.socket.close(1000);legacy.socket.close(1000);}
 });

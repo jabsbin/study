@@ -10,7 +10,7 @@ export class GardenConnection {
     try {
       const response = await fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
       if (!response.ok || !(await response.json()).multiplayer) throw new Error('Local-only garden');
-      const url = new URL('/api/room', location.href);if(this.name)url.searchParams.set('name',this.name); url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = new URL('/api/room', location.href);url.searchParams.set('v','2');if(this.name)url.searchParams.set('name',this.name); url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const socket = new WebSocket(url); this.socket = socket;
       socket.onmessage = event => {
         let data; try { data = JSON.parse(event.data); } catch { return; }
@@ -19,6 +19,11 @@ export class GardenConnection {
           this.handlers.status('online');
         } else if (data.type === 'snapshot') {
           this.players = data.players; this.handlers.snapshot(data.players, this.id,data.serverNow);
+        } else if(data.type==='player-moved'){
+          const player=this.players.find(p=>p.id===data.player.id);
+          if(player&&player.updatedAt>data.player.updatedAt)return;
+          if(player)Object.assign(player,data.player);
+          this.handlers.movement?.(data.player,data.serverNow);
         } else this.handlers.message(data);
       };
       socket.onclose = () => this.disconnected();
@@ -32,7 +37,8 @@ export class GardenConnection {
   }
   send(data) {
     if (!this.online || this.socket?.readyState !== WebSocket.OPEN) return false;
-    this.socket.send(JSON.stringify(data)); return true;
+    if(data.type==='move'&&this.socket.bufferedAmount>1024)return false;
+    this.socket.send(JSON.stringify(data.type==='move'?{...data,sampleTime:performance.now()}:data)); return true;
   }
   occupied(seatId) { return this.players.some(player => player.id !== this.id && player.seatId === seatId); }
 }

@@ -10,7 +10,8 @@
     "test": "playwright test",
     "dev:shared": "npm run build && wrangler dev --port 8787",
     "test:shared": "playwright test --config playwright.shared.config.js",
-    "test:room": "node --test worker/room.integration.test.js"
+    "test:room": "node --test worker/room.integration.test.js",
+    "test:motion": "node --test tests-unit/remote-motion.test.js"
   },
   "dependencies": {
     "@fontsource/gowun-batang": "5.3.0",
