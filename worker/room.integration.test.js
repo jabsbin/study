@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 const base = process.env.GARDEN_TEST_URL || 'http://127.0.0.1:8787';
-async function guest() {
-  const socket = new WebSocket(base.replace(/^http/,'ws') + '/api/room');
+async function guest(name='') {
+  const url=new URL('/api/room',base);if(name)url.searchParams.set('name',name);url.protocol=url.protocol==='https:'?'wss:':'ws:';
+  const socket = new WebSocket(url);
   const messages=[];
   socket.addEventListener('message',event=>messages.push(JSON.parse(event.data)));
   const wait=async(predicate,since=0)=>{
@@ -41,4 +42,31 @@ test('real Durable Object prevents duplicate seats, shares two occupants and rel
     const reclaim=other.messages.length;other.send({type:'sit',seatId:'bench-left-left'});
     await other.wait(m=>m.type==='seat-confirmed'&&m.seatId==='bench-left-left',reclaim);
   }finally{a.socket.close(1000);b.socket.close(1000);}
+});
+
+
+test('named gardens isolate guests; birthday and emotes are shared and late joiners catch up', {timeout:30000}, async()=>{
+  const room='party-'+crypto.randomUUID().slice(0,8),a=await guest(room),b=await guest(room),other=await guest('other-'+crypto.randomUUID().slice(0,8));
+  let late;
+  try{
+    await a.wait(m=>m.type==='snapshot'&&m.players.length===2);
+    const isolated=await other.wait(m=>m.type==='snapshot');assert.equal(isolated.players.length,1);
+    const near=a.messages.length;a.send({type:'move',x:0,z:-1,rotation:0,moving:false});
+    await a.wait(m=>m.type==='snapshot'&&m.players.find(p=>p.id===a.id)?.z===-1,near);
+    b.send({type:'move',x:.5,z:19,rotation:0,moving:true});
+    const startA=a.messages.length,startB=b.messages.length;
+    a.send({type:'celebrate'});
+    const [ea,eb]=await Promise.all([a.wait(m=>m.type==='celebration',startA),b.wait(m=>m.type==='celebration',startB)]);
+    assert.equal(ea.event.id,eb.event.id);assert.equal(ea.event.startedAt,eb.event.startedAt);
+    const duplicate=b.messages.length;b.send({type:'celebrate'});
+    assert.equal((await b.wait(m=>m.type==='celebration',duplicate)).event.id,ea.event.id);
+    late=await guest(room);assert.equal((await late.wait(m=>m.type==='celebration')).event.id,ea.event.id);
+    const reaction=b.messages.length;a.send({type:'emote',kind:'heart'});
+    const emote=await b.wait(m=>m.type==='emote'&&m.playerId===a.id,reaction);assert.equal(emote.emote.kind,'heart');
+    assert.equal(other.messages.filter(m=>m.type==='celebration'||m.type==='emote').length,0);
+    const before=b.messages.length;b.send({type:'move',x:40,z:40,rotation:0,moving:true});
+    b.send({type:'ping'});await b.wait(m=>m.type==='pong',before);
+    const stopped=b.messages.filter(m=>m.type==='snapshot').at(-1).players.find(p=>p.id===b.id);
+    assert.equal(stopped.z,19);assert.equal(stopped.moving,false);
+  }finally{a.socket.close(1000);b.socket.close(1000);other.socket.close(1000);late?.socket.close(1000);}
 });

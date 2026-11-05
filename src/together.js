@@ -1,6 +1,6 @@
 export class GardenConnection {
-  constructor(handlers) {
-    this.handlers = handlers; this.online = false; this.id = null;
+  constructor(handlers,name='') {
+    this.handlers = handlers;this.name=name; this.online = false; this.id = null;
     this.socket = null; this.retry = null; this.started = false; this.players = [];
     this.heartbeat=setInterval(()=>this.send({type:'ping'}),20000);
   }
@@ -10,7 +10,7 @@ export class GardenConnection {
     try {
       const response = await fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
       if (!response.ok || !(await response.json()).multiplayer) throw new Error('Local-only garden');
-      const url = new URL('/api/room', location.href); url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = new URL('/api/room', location.href);if(this.name)url.searchParams.set('name',this.name); url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const socket = new WebSocket(url); this.socket = socket;
       socket.onmessage = event => {
         let data; try { data = JSON.parse(event.data); } catch { return; }
@@ -18,7 +18,7 @@ export class GardenConnection {
           this.id = data.id; this.online = true; this.handlers.welcome(data);
           this.handlers.status('online');
         } else if (data.type === 'snapshot') {
-          this.players = data.players; this.handlers.snapshot(data.players, this.id);
+          this.players = data.players; this.handlers.snapshot(data.players, this.id,data.serverNow);
         } else this.handlers.message(data);
       };
       socket.onclose = () => this.disconnected();
