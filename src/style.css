@@ -20,3 +20,5 @@ body.is-seated #interact{left:auto;right:38px;transform:none}
 .journey-chevron{width:6px;height:6px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(45deg);margin-top:-3px;transition:transform .2s}
 #journey details[open] .journey-chevron{transform:rotate(225deg);margin-top:3px}
 @media(max-width:700px){#journey{padding:8px 14px}#journey summary{min-height:44px}}
+
+#together{position:fixed;top:94px;right:38px;border-radius:24px;padding:10px 15px;font-size:10px}body.welcome #together{display:none}#interact:disabled{cursor:wait;opacity:.7}@media(max-width:700px){#together{right:18px;font-size:9px;padding:9px 12px}}

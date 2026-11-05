@@ -32,7 +32,7 @@ async function sitAndStand(page,{id,x,z,label,button=false,screenshot=false}){
   await expect(page.locator('#interact')).toContainText(`${label}에 앉기`);
 }
 
-test('both café chairs and both garden benches support E to sit and stand',async({page})=>{
+test('both café chairs and all four bench places support E to sit and stand',async({page})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await enter(page);
   await walk(page,11.4,19);await walk(page,11.4,8.5);
@@ -43,10 +43,11 @@ test('both café chairs and both garden benches support E to sit and stand',asyn
   await walk(page,11,10.5);await walk(page,19.3,10.5);await walk(page,18.9,8.2);
   await sitAndStand(page,{id:'seat-1',x:16.9,z:7,label:'의자'});
   await walk(page,19.3,10.5);await walk(page,7,10.5);await walk(page,7,-18);
-  await walk(page,5.3,-19.7);
-  await sitAndStand(page,{id:'seat-3',x:5.3,z:-21.7,label:'벤치',screenshot:true});
-  await walk(page,-5.3,-19.7);
-  await sitAndStand(page,{id:'seat-2',x:-5.3,z:-21.7,label:'벤치'});
+  for(const side of [1,-1])for(const spot of [1,-1]){
+    const x=side*5.3+spot*.65;
+    await walk(page,x,-19.7);
+    await sitAndStand(page,{id:`bench-${side<0?'left':'right'}-${spot<0?'left':'right'}`,x,z:-21.7,label:'벤치',screenshot:spot===1});
+  }
   // Getting up puts us on reachable ground and restores normal walking/interactions.
   await walk(page,0,-19.7);
   await expect(page.locator('#interact')).toContainText('편지 읽기');
