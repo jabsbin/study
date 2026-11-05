@@ -7,3 +7,16 @@
 
 body.is-seated #interact{left:auto;right:38px;transform:none}
 @media(max-width:700px){body.is-seated #interact{right:18px}}
+
+#journey summary{display:flex;align-items:center;min-height:24px;cursor:pointer;list-style:none;gap:9px;user-select:none}
+#journey summary::-webkit-details-marker{display:none}
+#journey summary:focus-visible{outline:3px solid #ffe5a7;outline-offset:5px;border-radius:5px}
+.journey-label{font-size:12px;letter-spacing:.03em}
+.journey-label>span{color:#ffdfba;font-size:17px;margin-right:5px}
+#journey summary small{font-size:9px;opacity:.7;margin-left:auto;white-space:nowrap}
+#journey .journey-collapse{display:none}
+#journey details[open] .journey-collapse{display:inline}
+#journey details[open] .journey-expand{display:none}
+.journey-chevron{width:6px;height:6px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(45deg);margin-top:-3px;transition:transform .2s}
+#journey details[open] .journey-chevron{transform:rotate(225deg);margin-top:3px}
+@media(max-width:700px){#journey{padding:8px 14px}#journey summary{min-height:44px}}
