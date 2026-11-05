@@ -14,6 +14,9 @@ test('nickname and guestbook survive re-entry and show safe content on mobile',a
   await page.locator('#guestbook-dialog').press('Escape');await expect(page.locator('#guestbook-dialog')).toBeHidden();
   await enter();await expect(page.locator('#nickname')).toHaveValue('소원요정');await page.click('#enter');await page.waitForFunction(()=>__garden.connected);await openBook();
   await expect(page.locator('#book-list p')).toHaveText('생일 축하해! <img src=x onerror=alert(1)>');await expect(page.locator('#book-list strong')).toHaveText('소원요정');
-  await page.screenshot({path:'/tmp/guestbook-mobile.png'});expect(errors).toEqual([]);
+  await page.click('#book-list .book-edit');await page.fill('.book-editor','더 행복한 생일 보내!');await page.click('.book-save');await expect(page.locator('#book-feedback')).toContainText('수정 내용을 저장');await expect(page.locator('#book-list p')).toHaveText('더 행복한 생일 보내!');
+  await page.click('.book-delete');await page.click('.book-cancel');await expect(page.locator('#book-list p')).toHaveText('더 행복한 생일 보내!');
+  await page.click('.book-delete');await page.click('.book-delete-confirm');await expect(page.locator('#book-empty')).toBeVisible();await expect(page.locator('#book-feedback')).toContainText('삭제했어요');
+  await enter();await page.click('#enter');await page.waitForFunction(()=>__garden.connected);await openBook();await expect(page.locator('#book-empty')).toBeVisible();expect(errors).toEqual([]);
  }finally{await context.close();}
 });

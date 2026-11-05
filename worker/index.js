@@ -6,6 +6,11 @@ import { normalizeChatText } from '../src/chat-text.js';
 const layout = new Map(SEAT_LAYOUT.map(seat => [seat.id, seat]));
 const MAX_GUESTS = 8;
 function stateLabel(state){return state.nickname||(state.guestNumber?`친구 ${state.guestNumber}`:'친구');}
+async function authorHash(key){
+  if(typeof key!=='string'||! /^[a-f0-9]{64}$/.test(key))return null;
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(key)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+function publicEntry(entry,owner){const {ownerHash,lastMutationId,...visible}=entry;return {...visible,mine:Boolean(owner&&ownerHash===owner)};}
 function validPosition(position) {
   return position && Number.isFinite(position.x) && Number.isFinite(position.z)
     && Math.abs(position.x) <= 46 && Math.abs(position.z) <= 46;
@@ -36,6 +41,12 @@ export class BirthdayGarden extends DurableObject {
   activeCelebration(){return this.celebration&&Date.now()<this.celebration.startedAt+this.celebration.duration?this.celebration:null;}
   announce(data){const message={...data,serverNow:Date.now()};for(const socket of this.sockets())this.send(socket,message);}
 
+  bookEntry(socket,entry,clientId){
+    if(entry.deleted)this.send(socket,{type:'book-deleted',id:entry.id,clientId});
+    else this.send(socket,{type:'book-entry',entry:publicEntry(entry,socket.deserializeAttachment().bookOwner),clientId});
+  }
+  publishBook(entry,clientId){for(const peer of this.sockets())this.bookEntry(peer,entry,clientId);}
+  async bookOwner(socket,key){const hash=await authorHash(key);const state=socket.deserializeAttachment();state.bookOwner=hash;socket.serializeAttachment(state);return hash;}
   sockets() { return this.ctx.getWebSockets().filter(socket => socket.readyState === WebSocket.OPEN); }
   snapshot() {
     return this.sockets().map(socket => {
@@ -87,17 +98,19 @@ export class BirthdayGarden extends DurableObject {
     if(message.type==='book-list'){
       try{
         const cursor=typeof message.cursor==='string'&&/^book:\d{15}$/.test(message.cursor)?message.cursor:null;
+        const owner=await this.bookOwner(socket,message.authorKey);
         const records=await this.ctx.storage.list({prefix:'book:',reverse:true,limit:21,...(cursor?{end:cursor}:{})});
         const rows=[...records.entries()],page=rows.slice(0,20);
-        this.send(socket,{type:'book-page',entries:page.map(([,entry])=>entry),cursor:rows.length>20?page.at(-1)[0]:null,append:Boolean(cursor)});
+        this.send(socket,{type:'book-page',entries:page.map(([,entry])=>publicEntry(entry,owner)),cursor:rows.length>20?page.at(-1)[0]:null,append:Boolean(cursor)});
       }catch{this.send(socket,{type:'book-error',code:'storage'});}return;
     }
     if(message.type==='book-post'){
       const text=normalizeChatText(message.text),clientId=message.clientId;
       if(!text||typeof clientId!=='string'||! /^[a-f0-9-]{36}$/i.test(clientId)){this.send(socket,{type:'book-error',code:'invalid',clientId});return;}
       try{
+        const owner=await this.bookOwner(socket,message.authorKey);
         const existing=await this.ctx.storage.get('book-id:'+clientId);
-        if(existing){this.send(socket,{type:'book-entry',entry:existing,clientId});return;}
+        if(existing){this.bookEntry(socket,existing,clientId);return;}
         // Read fresh attachment after storage awaits so movement updates remain intact.
         const current=socket.deserializeAttachment();
         if(now-(current.lastBookAt||0)<10000){this.send(socket,{type:'book-error',code:'cooldown',clientId});return;}
@@ -105,10 +118,29 @@ export class BirthdayGarden extends DurableObject {
         const entry=await this.ctx.storage.transaction(async tx=>{
           const duplicate=await tx.get('book-id:'+clientId);if(duplicate)return duplicate;
           const sequence=(await tx.get('book-sequence')||0)+1;
-          const entry={id:clientId,sequence,sender:stateLabel(current),text,createdAt:now};
+          const entry={id:clientId,sequence,ownerHash:owner,revision:1,sender:stateLabel(current),text,createdAt:now};
           await tx.put({'book-sequence':sequence,['book:'+String(sequence).padStart(15,'0')]:entry,['book-id:'+clientId]:entry});return entry;
         });
-        this.announce({type:'book-entry',entry,clientId});
+        this.publishBook(entry,clientId);
+      }catch{this.send(socket,{type:'book-error',code:'storage',clientId});}return;
+    }
+    if(message.type==='book-edit'||message.type==='book-delete'){
+      const {id,clientId}=message,text=normalizeChatText(message.text),deleting=message.type==='book-delete';
+      if(typeof id!=='string'||! /^[a-f0-9-]{36}$/i.test(id)||typeof clientId!=='string'||! /^[a-f0-9-]{36}$/i.test(clientId)||(!deleting&&!text)){this.send(socket,{type:'book-error',code:'invalid',clientId});return;}
+      try{
+        const owner=await this.bookOwner(socket,message.authorKey);
+        const result=await this.ctx.storage.transaction(async tx=>{
+          const entry=await tx.get('book-id:'+id);
+          if(!entry||!owner||entry.ownerHash!==owner)return {error:'forbidden'};
+          if(entry.deleted)return deleting?{entry}:{error:'missing'};
+          if(entry.lastMutationId===clientId)return {entry};
+          if(message.revision!==(entry.revision||1))return {error:'conflict'};
+          const key='book:'+String(entry.sequence).padStart(15,'0');
+          if(deleting){const tombstone={id,sequence:entry.sequence,ownerHash:owner,deleted:true};await tx.delete(key);await tx.put('book-id:'+id,tombstone);return {entry:tombstone};}
+          const updated={...entry,text,revision:(entry.revision||1)+1,updatedAt:Date.now(),lastMutationId:clientId};
+          await tx.put({[key]:updated,['book-id:'+id]:updated});return {entry:updated};
+        });
+        if(result.error)this.send(socket,{type:'book-error',code:result.error,clientId});else this.publishBook(result.entry,clientId);
       }catch{this.send(socket,{type:'book-error',code:'storage',clientId});}return;
     }
     if(message.type==='chat'){

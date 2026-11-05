@@ -136,3 +136,23 @@ test('guestbook returns newest pages without losing older messages',{timeout:300
   assert.equal(older.entries.length,1);assert.equal(older.entries[0].text,'축하 1');assert.equal(older.cursor,null);
  }finally{reader?.socket.close(1000);}
 });
+
+test('only the browser author key can edit or delete; revisions, private metadata and tombstones survive reconnect',{timeout:20000},async()=>{
+ const room='owner-'+crypto.randomUUID().slice(0,8),key='a'.repeat(64),a=await guest(room,2,'같은이름'),b=await guest(room,2,'같은이름');let returning;
+ const id=crypto.randomUUID();
+ try{
+  a.send({type:'book-post',text:'원래 글',clientId:id,authorKey:key});const first=(await a.wait(m=>m.type==='book-entry')).entry;
+  assert.equal(first.mine,true);assert.equal(first.ownerHash,undefined);assert.equal((await b.wait(m=>m.type==='book-entry')).entry.mine,false);
+  const hack=crypto.randomUUID();b.send({type:'book-edit',id,clientId:hack,revision:1,text:'가짜 수정',authorKey:'b'.repeat(64)});assert.equal((await b.wait(m=>m.type==='book-error'&&m.clientId===hack)).code,'forbidden');
+  const delHack=crypto.randomUUID();b.send({type:'book-delete',id,clientId:delHack,revision:1,authorKey:'b'.repeat(64)});assert.equal((await b.wait(m=>m.type==='book-error'&&m.clientId===delHack)).code,'forbidden');
+  a.socket.close(1000);returning=await guest(room,2,'바뀐닉네임');returning.send({type:'book-list',authorKey:key});const list=await returning.wait(m=>m.type==='book-page');assert.equal(list.entries[0].mine,true);
+  const edit=crypto.randomUUID();returning.send({type:'book-edit',id,clientId:edit,revision:1,text:'수정된 글',authorKey:key});const update=(await returning.wait(m=>m.type==='book-entry'&&m.clientId===edit)).entry;
+  assert.equal(update.text,'수정된 글');assert.equal(update.revision,2);assert.equal(update.lastMutationId,undefined);assert.equal(update.ownerHash,undefined);
+  assert.equal((await b.wait(m=>m.type==='book-entry'&&m.clientId===edit)).entry.text,'수정된 글');
+  const duplicate=returning.messages.length;returning.send({type:'book-edit',id,clientId:edit,revision:1,text:'수정된 글',authorKey:key});assert.equal((await returning.wait(m=>m.type==='book-entry'&&m.clientId===edit,duplicate)).entry.revision,2);
+  const stale=crypto.randomUUID();returning.send({type:'book-edit',id,clientId:stale,revision:1,text:'덮어쓰기',authorKey:key});assert.equal((await returning.wait(m=>m.type==='book-error'&&m.clientId===stale)).code,'conflict');
+  const deletion=crypto.randomUUID();returning.send({type:'book-delete',id,clientId:deletion,revision:2,authorKey:key});await b.wait(m=>m.type==='book-deleted'&&m.id===id);
+  const mark=returning.messages.length;returning.send({type:'book-post',text:'부활하면 안 됨',clientId:id,authorKey:key});await returning.wait(m=>m.type==='book-deleted'&&m.id===id,mark);
+  returning.send({type:'book-list',authorKey:key});assert.deepEqual((await returning.wait(m=>m.type==='book-page',mark)).entries,[]);
+ }finally{for(const g of [a,b,returning])g?.socket.close(1000);}
+});
