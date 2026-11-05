@@ -1,9 +1,11 @@
 import { DurableObject } from 'cloudflare:workers';
 import { SEAT_LAYOUT } from '../src/seat-layout.js';
 import { normalizeName } from '../src/personalization.js';
+import { normalizeChatText } from '../src/chat-text.js';
 
 const layout = new Map(SEAT_LAYOUT.map(seat => [seat.id, seat]));
 const MAX_GUESTS = 8;
+function stateLabel(state){return state.guestNumber?`친구 ${state.guestNumber}`:'친구';}
 function validPosition(position) {
   return position && Number.isFinite(position.x) && Number.isFinite(position.z)
     && Math.abs(position.x) <= 46 && Math.abs(position.z) <= 46;
@@ -37,8 +39,9 @@ export class BirthdayGarden extends DurableObject {
   sockets() { return this.ctx.getWebSockets().filter(socket => socket.readyState === WebSocket.OPEN); }
   snapshot() {
     return this.sockets().map(socket => {
-      const { id, x, z, rotation, moving, seatId, emote, updatedAt, sampleTime } = socket.deserializeAttachment();
-      return { id, x, z, rotation, moving, seatId, updatedAt, sampleTime, emote:emote&&Date.now()-emote.startedAt<3000?emote:null };
+      const state=socket.deserializeAttachment();
+      const { id, x, z, rotation, moving, seatId, emote, updatedAt, sampleTime } = state;
+      return { id, x, z, rotation, moving, seatId, updatedAt, sampleTime,label:stateLabel(state), emote:emote&&Date.now()-emote.startedAt<3000?emote:null };
     });
   }
   send(socket, data) { try { socket.send(JSON.stringify(data)); } catch { /* A closing peer is removed by its close event. */ } }
@@ -57,12 +60,14 @@ export class BirthdayGarden extends DurableObject {
   async fetch(request) {
     const count = this.sockets().length;
     if (count >= MAX_GUESTS) return new Response('The garden is full. Please try again shortly.', { status: 503 });
+    const occupiedNumbers=new Set(this.sockets().map(peer=>peer.deserializeAttachment().guestNumber));
+    const guestNumber=Array.from({length:MAX_GUESTS},(_,i)=>i+1).find(n=>!occupiedNumbers.has(n));
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    const state = { id: crypto.randomUUID(), x: (count % 4 - 1.5) * 1.3, z: 19 + Math.floor(count / 4) * 1.5, rotation: 0, moving: false, seatId: null, protocol:new URL(request.url).searchParams.get('v')==='2'?2:1,updatedAt:Date.now(), windowStart: Date.now(), packets: 0 };
+    const state = { id: crypto.randomUUID(),guestNumber, x: (count % 4 - 1.5) * 1.3, z: 19 + Math.floor(count / 4) * 1.5, rotation: 0, moving: false, seatId: null, protocol:new URL(request.url).searchParams.get('v')==='2'?2:1,updatedAt:Date.now(), windowStart: Date.now(), packets: 0 };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(state);
-    this.send(server, { type: 'welcome', id: state.id, spawn: { x: state.x, z: state.z } });
+    this.send(server, { type: 'welcome', id: state.id,label:stateLabel(state), spawn: { x: state.x, z: state.z } });
     this.broadcast();
     if(this.activeCelebration())this.send(server,{type:'celebration',event:this.celebration,serverNow:Date.now()});
     return new Response(null, { status: 101, webSocket: client });
@@ -78,6 +83,13 @@ export class BirthdayGarden extends DurableObject {
     state.packets++;
     if (state.packets > 30) { socket.serializeAttachment(state); return; }
     if (message.type === 'ping') { socket.serializeAttachment(state); this.send(socket, { type: 'pong' }); return; }
+    if(message.type==='chat'){
+      const text=normalizeChatText(message.text),clientId=typeof message.clientId==='string'?message.clientId.slice(0,64):null;
+      if(!text){this.send(socket,{type:'chat-error',code:'empty',clientId});return;}
+      if(now-(state.lastChatAt||0)<800){this.send(socket,{type:'chat-error',code:'cooldown',clientId});return;}
+      state.lastChatAt=now;socket.serializeAttachment(state);
+      this.announce({type:'chat',message:{id:crypto.randomUUID(),senderId:state.id,sender:stateLabel(state),text,sentAt:now,clientId}});return;
+    }
     if(message.type==='celebrate'){
       const active=this.activeCelebration();
       if(active){this.send(socket,{type:'celebration',event:active,serverNow:now});return;}
@@ -91,7 +103,7 @@ export class BirthdayGarden extends DurableObject {
     }
     if(message.type==='emote'){
       if(!['wave','heart','clap'].includes(message.kind)||now-(state.emote?.startedAt||0)<1500)return;
-      state.emote={id:crypto.randomUUID(),kind:message.kind,startedAt:now};
+      state.emote={id:crypto.randomUUID(),kind:message.kind,startedAt:now,...(message.kind==='clap'&&Number.isFinite(message.rotation)?{rotation:message.rotation%(Math.PI*2)}:{})};
       socket.serializeAttachment(state);this.announce({type:'emote',playerId:state.id,emote:state.emote});return;
     }
     if(this.activeCelebration()&&['move','sit','stand'].includes(message.type)){

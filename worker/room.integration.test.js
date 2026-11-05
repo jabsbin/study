@@ -88,3 +88,18 @@ test('modern movement sends ordered individual updates without self echo; legacy
   await b.wait(m=>m.type==='snapshot'&&m.players.find(p=>p.id===a.id)?.seatId==='bench-left-left',seat);
  }finally{a.socket.close(1000);b.socket.close(1000);legacy.socket.close(1000);}
 });
+
+test('chat echoes safe bounded text only to this room, throttles repeats and keeps no history',{timeout:20000},async()=>{
+ const room='chat-'+crypto.randomUUID().slice(0,8),a=await guest(room,2),b=await guest(room,2),other=await guest(room+'-other',2);let late;
+ try{
+  const text='<img src=x onerror=alert(1)> 안녕';a.send({type:'chat',text,clientId:'first'});
+  const [own,peer]=await Promise.all([a.wait(m=>m.type==='chat'),b.wait(m=>m.type==='chat')]);
+  assert.equal(own.message.id,peer.message.id);assert.equal(peer.message.text,text);assert.equal(peer.message.senderId,a.id);assert.equal(peer.message.sender,'친구 1');
+  a.send({type:'chat',text:'again',clientId:'fast'});assert.equal((await a.wait(m=>m.type==='chat-error'&&m.clientId==='fast')).code,'cooldown');
+  a.send({type:'chat',text:' \n ',clientId:'empty'});assert.equal((await a.wait(m=>m.type==='chat-error'&&m.clientId==='empty')).code,'empty');
+  await new Promise(resolve=>setTimeout(resolve,850));a.send({type:'chat',text:'  '+ '🎂'.repeat(205),clientId:'long'});
+  assert.equal(Array.from((await b.wait(m=>m.type==='chat'&&m.message.clientId==='long')).message.text).length,200);
+  assert.equal(other.messages.filter(m=>m.type==='chat').length,0);
+  late=await guest(room,2);late.send({type:'ping'});await late.wait(m=>m.type==='pong');assert.equal(late.messages.filter(m=>m.type==='chat').length,0);
+ }finally{for(const g of [a,b,other,late])g?.socket.close(1000);}
+});
