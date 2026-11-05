@@ -9,7 +9,7 @@ for(const mobile of [false,true])test(`clap turns avatar toward unchanged camera
  await expect.poll(()=>page.evaluate(()=>__garden.cameraFacing)).toBeGreaterThan(.95);
  expect(await page.evaluate(()=>__garden.cameraView)).toEqual(before.view);
  expect(await page.evaluate(()=>__garden.position)).toEqual(before.position);
- if(!mobile){await page.click('#emote-clap');await expect.poll(()=>page.evaluate(()=>__garden.cameraFacing)).toBeGreaterThan(.95);}
+ if(!mobile){await page.click('#emote-clap');await page.waitForFunction(()=>__garden.cameraFacing>.95,{},{timeout:5000});}
  await expect.poll(()=>page.evaluate(()=>__garden.clapTurning),{timeout:7000}).toBe(false);
  expect(await page.evaluate(()=>__garden.cameraFacing)).toBeCloseTo(before.facing,1);
  expect(errors).toEqual([]);
@@ -20,7 +20,7 @@ test('seated clap faces the camera without losing the seat',async({page})=>{
  await page.goto('/');await page.waitForFunction(()=>window.__garden?.ready);await page.click('#enter');await expect(page.locator('#welcome')).toBeHidden();await page.click('#sound');
  await walk(page,11.4,19);await walk(page,11.4,8.5);await page.keyboard.press('e');await expect.poll(()=>page.evaluate(()=>__garden.seated)).toBe('seat-0');
  await page.waitForTimeout(1000);const before=await page.evaluate(()=>__garden.cameraView);
- await page.click('#emote-clap');await expect.poll(()=>page.evaluate(()=>__garden.cameraFacing)).toBeGreaterThan(.95);
+ await page.click('#emote-clap');await page.waitForFunction(()=>__garden.cameraFacing>.95,{},{timeout:5000});
  expect(await page.evaluate(()=>__garden.cameraView)).toEqual(before);expect(await page.evaluate(()=>__garden.seated)).toBe('seat-0');
  await expect.poll(()=>page.evaluate(()=>__garden.clapTurning),{timeout:7000}).toBe(false);
  await page.keyboard.press('e');await expect.poll(()=>page.evaluate(()=>__garden.seated)).toBe(null);

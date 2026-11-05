@@ -7,9 +7,10 @@ import { SEAT_LAYOUT } from './seat-layout.js';
 import { GardenConnection } from './together.js';
 import { RemoteMotion } from './remote-motion.js';
 import { createSpeechBubble } from './speech-bubble.js';
+import { setupGuestbook } from './guestbook-ui.js';
 import { setupChatUI } from './chat-ui.js';
 import { clapFacing,CLAP_DURATION,CLAP_RETURN } from './clap-facing.js';
-import { normalizeName,vocative } from './personalization.js';
+import { normalizeName,normalizeNickname,vocative } from './personalization.js';
 import { setupExperienceUI } from './experience-ui.js';
 
 const $ = (id) => document.getElementById(id);
@@ -158,13 +159,21 @@ function updateTogether(status){
   const text=status==='online'?`✧ 동산에 ${connection.players.length||1}명`:status==='connecting'?'✧ 친구와 연결 중':'✧ 혼자 산책 중';
   if(badge.textContent!==text)badge.textContent=text;
 }
+const book=setupGuestbook({send:data=>connection.send(data),onModal(open){modal=open;resetSeatMovement();}});
+let ownTag=null;
+function updateOwnTag(text){
+  if(ownTag){ownTag.geometry.dispose();ownTag.material.map.dispose();ownTag.material.dispose();ownTag.removeFromParent();}
+  ownTag=label(body,text,0,3.7,0,2.8,.6,'#fff5e5','#695574aa',150);
+}
+try{$('nickname').value=normalizeNickname(localStorage.getItem('garden-nickname')||'');}catch{}
 const connection=new GardenConnection({
   welcome(data){
+    updateOwnTag(data.label||connection.nickname||'나');
     if(!joinedBefore&&!seated&&Math.hypot(player.position.x,player.position.z-19)<4)player.position.set(data.spawn.x,0,data.spawn.z);
     joinedBefore=true;lastNetworkState='';
   },
   status(status){
-    updateTogether(status);chat.setConnection(status);
+    updateTogether(status);chat.setConnection(status);book.connection(status);
     if(status==='offline'){celebrationPending=false;clearTimeout(celebrationTimeout);clearSeatPending();if(seated?.networked){standUp();toast('연결이 잠시 끊겨 안전하게 일어났어요. 다시 연결할게요.');}}
     if(status==='online'&&seated&&!seated.networked){standUp();toast('친구와 연결됐어요! 자리를 다시 선택해 주세요.');}
   },
@@ -175,7 +184,7 @@ const connection=new GardenConnection({
       friend.tag.material.map.dispose();friend.tag.material.dispose();friend.avatar.reaction.material.map.dispose();friend.avatar.reaction.material.dispose();friend.avatar.speech.dispose();friend.avatar.root.removeFromParent();friends.delete(key);emotes.delete(key);
     }
     for(const state of players){if(state.emote)receiveEmote(state.id,state.emote,serverNow);if(state.id===id)continue;let friend=friends.get(state.id);
-      if(!friend){const avatar=createVisitor(state.x,state.z,'#d5dfed');const tag=label(avatar.body,state.label||'친구 ♡',0,3.7,0,1.8,.45);friend={avatar,tag,state,motion:new RemoteMotion(),pose:{}};friends.set(state.id,friend);}
+      if(!friend){const avatar=createVisitor(state.x,state.z,'#d5dfed');const tag=label(avatar.body,state.label||'친구 ♡',0,3.7,0,2.8,.6,'#fff5e5','#695574aa',150);friend={avatar,tag,state,motion:new RemoteMotion(),pose:{}};friends.set(state.id,friend);}
       if(friend.motion.push(state,serverNow))friend.state=state;
     }
     updateTogether(connection.online?'online':'offline');
@@ -185,6 +194,7 @@ const connection=new GardenConnection({
     if(friend&&friend.motion.push(state,serverNow))friend.state=state;
   },
   message(data){
+    book.message(data);
     if(data.type==='chat'){
       const self=data.message.senderId===connection.id;
       chat.receive(data.message,self);
@@ -211,7 +221,8 @@ if(birthdayName){
 }
 let toastTimer;function toast(message,duration=4000){$('toast').textContent=message;$('toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('visible'),duration);}
 function soundUI(){$('sound').innerHTML=`♫<span>${audio.enabled?'ON':'OFF'}</span>`;$('sound').setAttribute('aria-label',audio.enabled?'소리 끄기':'소리 켜기');$('sound').setAttribute('aria-pressed',String(audio.enabled));}
-$('enter').onclick=async()=>{entered=true;intro=1;connection.connect();$('welcome').classList.add('leaving');document.body.classList.remove('welcome');try{await audio.start();audio.effect('click');}catch{toast('소리 없이도 동산을 즐길 수 있어요');}soundUI();setTimeout(()=>{$('welcome').hidden=true;toast('어서 와! 오늘은 너를 위한 날이야 ♡');},1100);};
+$('enter').onclick=async()=>{if(entered)return;connection.nickname=normalizeNickname($('nickname').value);updateOwnTag(connection.nickname||'나');try{localStorage.setItem('garden-nickname',connection.nickname);}catch{}entered=true;intro=1;connection.connect();$('welcome').classList.add('leaving');document.body.classList.remove('welcome');try{await audio.start();audio.effect('click');}catch{toast('소리 없이도 동산을 즐길 수 있어요');}soundUI();setTimeout(()=>{$('welcome').hidden=true;toast('어서 와! 오늘은 너를 위한 날이야 ♡');},1100);};
+$('nickname').onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();$('enter').click();}};
 $('sound').onclick=async()=>{if(!entered)return;try{await audio.toggle();soundUI();}catch{toast('이 브라우저에서 소리를 시작하지 못했어요.');}};
 function setModal(id,open){$(id).hidden=!open;modal=open;keys.clear();joy.set(0,0);if(open)$(id).querySelector('button').focus();}
 $('help').onclick=()=>{if(entered)setModal('help-modal',true);};$('close-help').onclick=()=>setModal('help-modal',false);$('close-letter').onclick=()=>{setModal('letter',false);audio.effect('click');};
@@ -388,7 +399,7 @@ desiredCamera.y=Math.max(desiredCamera.y,3);camera.position.lerp(desiredCamera,1
 if(Math.hypot(camera.position.x-16,camera.position.z+1)<5.5)camera.position.y=Math.max(camera.position.y,9.2);
 smoothLook.lerp(look,1-Math.exp(-dt*6));camera.lookAt(smoothLook);
 targetUpdate();frameNumber++;if(frameNumber%12===0||(walking&&frameNumber%4===0))renderer.shadowMap.needsUpdate=true;
-qualityFrames++;if(performance.now()-qualityTime>2500){const fps=qualityFrames*1000/(performance.now()-qualityTime);if(fps<24&&renderer.getPixelRatio()>.75)renderer.setPixelRatio(Math.max(.75,renderer.getPixelRatio()-.25));qualityFrames=0;qualityTime=performance.now();}renderer.render(scene,camera);visitor.speech.update(camera,innerWidth,innerHeight);for(const friend of friends.values())friend.avatar.speech.update(camera,innerWidth,innerHeight);}
+qualityFrames++;if(performance.now()-qualityTime>2500){const fps=qualityFrames*1000/(performance.now()-qualityTime);if(fps<24&&renderer.getPixelRatio()>.75)renderer.setPixelRatio(Math.max(.75,renderer.getPixelRatio()-.25));qualityFrames=0;qualityTime=performance.now();}if(ownTag)ownTag.quaternion.copy(player.quaternion).invert().multiply(camera.quaternion);renderer.render(scene,camera);visitor.speech.update(camera,innerWidth,innerHeight);for(const friend of friends.values())friend.avatar.speech.update(camera,innerWidth,innerHeight);}
 const experience=setupExperienceUI({name:birthdayName,onEmote:sendEmote,onReset:resetCamera,onModal(open){modal=open;resetSeatMovement();},onPhoto(open){photoMode=open;resetSeatMovement();},async capture(){
   const previous=renderer.getPixelRatio(),size=new THREE.Vector2();renderer.getSize(size);
   try{

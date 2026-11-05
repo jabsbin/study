@@ -1,11 +1,11 @@
 import { DurableObject } from 'cloudflare:workers';
 import { SEAT_LAYOUT } from '../src/seat-layout.js';
-import { normalizeName } from '../src/personalization.js';
+import { normalizeName,normalizeNickname } from '../src/personalization.js';
 import { normalizeChatText } from '../src/chat-text.js';
 
 const layout = new Map(SEAT_LAYOUT.map(seat => [seat.id, seat]));
 const MAX_GUESTS = 8;
-function stateLabel(state){return state.guestNumber?`친구 ${state.guestNumber}`:'친구';}
+function stateLabel(state){return state.nickname||(state.guestNumber?`친구 ${state.guestNumber}`:'친구');}
 function validPosition(position) {
   return position && Number.isFinite(position.x) && Number.isFinite(position.z)
     && Math.abs(position.x) <= 46 && Math.abs(position.z) <= 46;
@@ -64,7 +64,7 @@ export class BirthdayGarden extends DurableObject {
     const guestNumber=Array.from({length:MAX_GUESTS},(_,i)=>i+1).find(n=>!occupiedNumbers.has(n));
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    const state = { id: crypto.randomUUID(),guestNumber, x: (count % 4 - 1.5) * 1.3, z: 19 + Math.floor(count / 4) * 1.5, rotation: 0, moving: false, seatId: null, protocol:new URL(request.url).searchParams.get('v')==='2'?2:1,updatedAt:Date.now(), windowStart: Date.now(), packets: 0 };
+    const state = { id: crypto.randomUUID(),nickname:normalizeNickname(new URL(request.url).searchParams.get('nick')||''),guestNumber, x: (count % 4 - 1.5) * 1.3, z: 19 + Math.floor(count / 4) * 1.5, rotation: 0, moving: false, seatId: null, protocol:new URL(request.url).searchParams.get('v')==='2'?2:1,updatedAt:Date.now(), windowStart: Date.now(), packets: 0 };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(state);
     this.send(server, { type: 'welcome', id: state.id,label:stateLabel(state), spawn: { x: state.x, z: state.z } });
@@ -82,7 +82,35 @@ export class BirthdayGarden extends DurableObject {
     if (now - state.windowStart > 1000) { state.windowStart = now; state.packets = 0; }
     state.packets++;
     if (state.packets > 30) { socket.serializeAttachment(state); return; }
+    socket.serializeAttachment(state);
     if (message.type === 'ping') { socket.serializeAttachment(state); this.send(socket, { type: 'pong' }); return; }
+    if(message.type==='book-list'){
+      try{
+        const cursor=typeof message.cursor==='string'&&/^book:\d{15}$/.test(message.cursor)?message.cursor:null;
+        const records=await this.ctx.storage.list({prefix:'book:',reverse:true,limit:21,...(cursor?{end:cursor}:{})});
+        const rows=[...records.entries()],page=rows.slice(0,20);
+        this.send(socket,{type:'book-page',entries:page.map(([,entry])=>entry),cursor:rows.length>20?page.at(-1)[0]:null,append:Boolean(cursor)});
+      }catch{this.send(socket,{type:'book-error',code:'storage'});}return;
+    }
+    if(message.type==='book-post'){
+      const text=normalizeChatText(message.text),clientId=message.clientId;
+      if(!text||typeof clientId!=='string'||! /^[a-f0-9-]{36}$/i.test(clientId)){this.send(socket,{type:'book-error',code:'invalid',clientId});return;}
+      try{
+        const existing=await this.ctx.storage.get('book-id:'+clientId);
+        if(existing){this.send(socket,{type:'book-entry',entry:existing,clientId});return;}
+        // Read fresh attachment after storage awaits so movement updates remain intact.
+        const current=socket.deserializeAttachment();
+        if(now-(current.lastBookAt||0)<10000){this.send(socket,{type:'book-error',code:'cooldown',clientId});return;}
+        current.lastBookAt=now;socket.serializeAttachment(current);
+        const entry=await this.ctx.storage.transaction(async tx=>{
+          const duplicate=await tx.get('book-id:'+clientId);if(duplicate)return duplicate;
+          const sequence=(await tx.get('book-sequence')||0)+1;
+          const entry={id:clientId,sequence,sender:stateLabel(current),text,createdAt:now};
+          await tx.put({'book-sequence':sequence,['book:'+String(sequence).padStart(15,'0')]:entry,['book-id:'+clientId]:entry});return entry;
+        });
+        this.announce({type:'book-entry',entry,clientId});
+      }catch{this.send(socket,{type:'book-error',code:'storage',clientId});}return;
+    }
     if(message.type==='chat'){
       const text=normalizeChatText(message.text),clientId=typeof message.clientId==='string'?message.clientId.slice(0,64):null;
       if(!text){this.send(socket,{type:'chat-error',code:'empty',clientId});return;}

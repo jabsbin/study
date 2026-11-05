@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 const base = process.env.GARDEN_TEST_URL || 'http://127.0.0.1:8787';
-async function guest(name='',protocol=1) {
-  const url=new URL('/api/room',base);if(name)url.searchParams.set('name',name);if(protocol===2)url.searchParams.set('v','2');url.protocol=url.protocol==='https:'?'wss:':'ws:';
+async function guest(name='',protocol=1,nickname='') {
+  const url=new URL('/api/room',base);if(name)url.searchParams.set('name',name);if(nickname)url.searchParams.set('nick',nickname);if(protocol===2)url.searchParams.set('v','2');url.protocol=url.protocol==='https:'?'wss:':'ws:';
   const socket = new WebSocket(url);
   const messages=[];
   socket.addEventListener('message',event=>messages.push(JSON.parse(event.data)));
@@ -102,4 +102,37 @@ test('chat echoes safe bounded text only to this room, throttles repeats and kee
   assert.equal(other.messages.filter(m=>m.type==='chat').length,0);
   late=await guest(room,2);late.send({type:'ping'});await late.wait(m=>m.type==='pong');assert.equal(late.messages.filter(m=>m.type==='chat').length,0);
  }finally{for(const g of [a,b,other,late])g?.socket.close(1000);}
+});
+
+
+test('nicknames label avatars and chat; guestbook persists, isolates rooms, deduplicates and rejects rapid posts',{timeout:20000},async()=>{
+ const room='book-'+crypto.randomUUID().slice(0,8),a=await guest(room,2,'소원요정'),b=await guest(room,2,'<b>친구</b>'),other=await guest(room+'-x',2);let late;
+ const id=crypto.randomUUID();
+ try{
+  assert.equal(a.messages.find(m=>m.type==='welcome').label,'소원요정');
+  const snap=await a.wait(m=>m.type==='snapshot'&&m.players.length===2);assert.equal(snap.players.find(p=>p.id===b.id).label,'<b>친구</b>');
+  a.send({type:'chat',text:'안녕',clientId:'nick-chat'});assert.equal((await b.wait(m=>m.type==='chat')).message.sender,'소원요정');
+  a.send({type:'book-post',text:'생일 축하해! <img src=x>',clientId:id});
+  const entry=(await b.wait(m=>m.type==='book-entry')).entry;assert.equal(entry.sender,'소원요정');assert.equal(entry.text,'생일 축하해! <img src=x>');
+  const mark=a.messages.length;a.send({type:'book-post',text:'changed',clientId:id});assert.equal((await a.wait(m=>m.type==='book-entry',mark)).entry.id,id);
+  a.send({type:'book-post',text:'too soon',clientId:crypto.randomUUID()});assert.equal((await a.wait(m=>m.type==='book-error')).code,'cooldown');
+  other.send({type:'book-list'});assert.deepEqual((await other.wait(m=>m.type==='book-page')).entries,[]);
+  a.socket.close(1000);b.socket.close(1000);
+  late=await guest(room,2,'나중에 온 친구');late.send({type:'book-list'});
+  const saved=await late.wait(m=>m.type==='book-page');assert.equal(saved.entries.length,1);assert.equal(saved.entries[0].id,id);assert.equal(saved.entries[0].sender,'소원요정');
+ }finally{for(const g of [a,b,other,late])g?.socket.close(1000);}
+});
+
+test('guestbook returns newest pages without losing older messages',{timeout:30000},async()=>{
+ const room='pages-'+crypto.randomUUID().slice(0,8);let reader;
+ try{
+  for(let i=1;i<=21;i++){
+   const writer=await guest(room,2,'친구'+i);
+   try{writer.send({type:'book-post',text:'축하 '+i,clientId:crypto.randomUUID()});await writer.wait(m=>m.type==='book-entry');}finally{writer.socket.close(1000);}
+  }
+  reader=await guest(room,2);reader.send({type:'book-list'});const first=await reader.wait(m=>m.type==='book-page');
+  assert.equal(first.entries.length,20);assert.equal(first.entries[0].text,'축하 21');assert.equal(first.entries.at(-1).text,'축하 2');assert(first.cursor);
+  const mark=reader.messages.length;reader.send({type:'book-list',cursor:first.cursor});const older=await reader.wait(m=>m.type==='book-page',mark);
+  assert.equal(older.entries.length,1);assert.equal(older.entries[0].text,'축하 1');assert.equal(older.cursor,null);
+ }finally{reader?.socket.close(1000);}
 });

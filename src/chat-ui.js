@@ -31,7 +31,7 @@ export function setupChatUI({send,onTyping}){
       const nearBottom=log.scrollHeight-log.scrollTop-log.clientHeight<40;
       const row=document.createElement('li');row.className=self?'chat-line mine':'chat-line';row.dataset.messageId=message.id;
       const meta=document.createElement('div');meta.className='chat-meta';
-      const sender=document.createElement('strong');sender.textContent=self?'나':message.sender;
+      const sender=document.createElement('strong');sender.textContent=self?`${message.sender} (나)`:message.sender;
       const time=document.createElement('time');time.dateTime=new Date(message.sentAt).toISOString();time.textContent=new Date(message.sentAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Seoul'});
       meta.append(sender,time);const text=document.createElement('p');text.className='chat-text';text.textContent=message.text;row.append(meta,text);log.append(row);
       if(log.children.length>50){const removed=log.firstElementChild;seen.delete(removed.dataset.messageId);removed.remove();}

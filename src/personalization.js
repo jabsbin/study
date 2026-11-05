@@ -10,3 +10,5 @@ export function giftURL(origin,name) {
   if(normalized)url.searchParams.set('name',normalized);
   return url.href;
 }
+
+export function normalizeNickname(value=''){return [...normalizeName(value)].slice(0,12).join('');}
