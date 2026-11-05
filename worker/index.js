@@ -1,3 +1,4 @@
+import { clearRequestedGuestbook } from './guestbook-cleanup.js';
 import { DurableObject } from 'cloudflare:workers';
 import { SEAT_LAYOUT } from '../src/seat-layout.js';
 import { normalizeName,normalizeNickname } from '../src/personalization.js';
@@ -36,7 +37,7 @@ export default {
 export class BirthdayGarden extends DurableObject {
   constructor(ctx,env){
     super(ctx,env);this.celebration=null;
-    ctx.blockConcurrencyWhile(async()=>{this.celebration=await ctx.storage.get('celebration')||null;});
+    ctx.blockConcurrencyWhile(async()=>{await clearRequestedGuestbook(ctx.storage);this.celebration=await ctx.storage.get('celebration')||null;});
   }
   activeCelebration(){return this.celebration&&Date.now()<this.celebration.startedAt+this.celebration.duration?this.celebration:null;}
   announce(data){const message={...data,serverNow:Date.now()};for(const socket of this.sockets())this.send(socket,message);}
