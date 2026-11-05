@@ -4,3 +4,6 @@
 
 @media(min-width:701px){header .brand{position:absolute;left:50%;transform:translateX(-50%)}header .top-actions{margin-left:auto}}
 @media(max-width:700px){#journey .journey-foot,#journey .quest small{display:none}#journey h2{margin:8px 0 14px;font-size:13px}#journey .quest{margin:10px 0}}
+
+body.is-seated #interact{left:auto;right:38px;transform:none}
+@media(max-width:700px){body.is-seated #interact{right:18px}}
